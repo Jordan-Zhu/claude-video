@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from functools import lru_cache
 import re
 import shutil
@@ -17,10 +18,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+from config import positive_number
 from runtime import configure_stdio, run_text, diagnostic
 
 
-MAX_FPS = 2.0
+# ponytail: 2.0 is the sane default ceiling, not a law of nature — a fight scene or
+# any fast choreography needs more. Raising it changes nothing on its own: auto_fps and
+# auto_fps_focus target a frame *budget*, so the ceiling only ever binds an explicit
+# --fps. Pair it with --start/--end and --max-frames on a short range:
+#   WATCH_MAX_FPS=24 watch.py clip.mp4 --start 1:10 --end 1:40 --fps 24 --max-frames 720
+# Cost is the real ceiling: ~200 tokens per 512px frame, so 24fps is affordable for
+# tens of seconds, not minutes.
+# Read from the environment only, not ~/.config/watch/.env: it is a per-run override.
+MAX_FPS = positive_number(os.environ.get("WATCH_MAX_FPS", "2.0"), "WATCH_MAX_FPS")
 SCENE_THRESHOLD = 0.20
 # Keep scene-detection results once we have at least this many distinct shots.
 # Below this the video is effectively static (screen recording, talking head),
