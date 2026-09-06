@@ -179,6 +179,22 @@ def extract(
     if shutil.which("ffmpeg") is None:
         raise SystemExit("ffmpeg is not installed. Install with: brew install ffmpeg")
 
+    # ponytail: `fps` and `-frames:v max_frames` together only cover
+    # max_frames/fps seconds — ffmpeg stops decoding there, so a cap smaller than
+    # fps*duration spends the whole budget at the head of the range and leaves the
+    # tail unwatched. Lower fps instead so the budget spans the requested range.
+    # Costs one ffprobe only when the range has no explicit end.
+    if fps > 0 and max_frames:
+        span_end = end_seconds if end_seconds is not None else get_metadata(video_path)["duration_seconds"]
+        span = max(0.0, span_end - (start_seconds or 0.0))
+        if span > 0 and max_frames < int(round(fps * span)):
+            fps = max_frames / span
+            print(
+                f"[watch] fps lowered to {fps:.4f} so {max_frames} frames span the full "
+                f"{span:.0f}s (the requested fps would have covered only the opening seconds)",
+                file=sys.stderr,
+            )
+
     out_dir.mkdir(parents=True, exist_ok=True)
     for existing in out_dir.glob("frame_*.jpg"):
         existing.unlink()

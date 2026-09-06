@@ -84,3 +84,11 @@ def test_even_time_indices_spreads_over_clustered_candidates():
     assert frames._even_time_indices(times, 99) == list(range(len(times)))
     assert frames._even_time_indices(times, 1) == [0]
     assert frames._even_time_indices([5.0] * 10, 3) == [0, 4, 9]  # flat → index
+
+
+def test_extract_lowers_fps_so_cap_spans_the_range(cut_clip: Path, tmp_path: Path):
+    """4 frames at 2fps covers only the opening 2s of a 5.6s clip; the cap has
+    to stretch over the whole range instead of clumping at the head."""
+    out = frames.extract(str(cut_clip), tmp_path / "f", fps=2.0, max_frames=4)
+    assert len(out) == 4
+    assert out[-1]["timestamp_seconds"] > 3.0
