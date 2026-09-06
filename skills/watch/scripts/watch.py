@@ -12,6 +12,12 @@ import tempfile
 from pathlib import Path
 
 
+# ponytail: Windows stdout defaults to cp1252, which cannot encode the report's
+# arrows or emoji from video.info.json — the run completes and then dies printing it.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
