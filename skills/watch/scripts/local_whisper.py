@@ -20,6 +20,21 @@ from whisper import extract_audio  # same ffmpeg mono-16k extraction as the clou
 # for speed on a slow CPU. int8 keeps it torch-free; bump to float16 if on GPU.
 DEFAULT_MODEL = os.environ.get("WATCH_FW_MODEL", "large-v3")
 
+# ponytail: whisper's own doubt cutoffs. Segments past either are MARKED, never
+# dropped — silently deleting weak audio is how the tail got eaten before, and a
+# reader can discount a marked line but not a removed one.
+#
+# Know what this does NOT do. It catches degraded audio, not invention. Measured on
+# the confabulated "yes, ma'am" passage that motivated it, the made-up lines scored
+# no_speech_prob 0.04 / avg_logprob -0.35 — more confident than the real dialogue
+# beside them, because these numbers describe decoding certainty, not truth, and a
+# fluent hallucination off a strong language prior decodes cleanly. The values are
+# also per decode window, not per segment: every line in that 30-second stretch
+# carried identical figures. Frames remain the only check on whether a quiet scene
+# said what the transcript claims.
+NO_SPEECH_MAX = 0.6
+AVG_LOGPROB_MIN = -1.0
+
 _model_cache: dict[str, object] = {}
 
 
@@ -54,13 +69,15 @@ def transcribe_video_local(
     # settings are the fix: no conditioning on prior text, and a temperature ladder so
     # a degenerate decode is retried instead of accepted.
     #
-    # vad_filter is deliberately OFF. It looks like a free win and is not: on a
-    # 114-minute film it cut the last 26 minutes from 323 segments to 43 and dropped
-    # 1:33:02-1:43:16 entirely, and the same audio truncated at a different point when
-    # passed whole vs. sliced — so the loss scales with input length. It trades a loud
-    # failure (looping) for a silent one (a tail that just isn't there), which is worse
-    # because nothing in the output says it happened. Do not re-enable it as a
-    # denoising tweak without re-measuring segment counts on a long file.
+    # vad_filter is deliberately OFF, and this is a trade rather than a free win.
+    # ON, a 114-minute film lost its last 21 minutes outright (785 segments vs 1543),
+    # and the truncation point moved depending on whether the audio was passed whole
+    # or sliced, so the loss scales with input length. OFF, silence reaches the model
+    # and it confabulates fluent dialogue over it — on that same film it invented a
+    # cleanup crew answering "yes, ma'am" over a scene where the frames show one
+    # person alone. Losing 21 real minutes is worse than gaining a few invented lines
+    # that the confidence marking below flags, so OFF stands. Do not flip it back
+    # without re-measuring segment counts on a long file.
     segments_iter, _info = model.transcribe(
         str(audio_path.resolve()),
         beam_size=5,
@@ -69,15 +86,28 @@ def transcribe_video_local(
     )
 
     out: list[dict] = []
+    n_unsure = 0
     for seg in segments_iter:
         text = (seg.text or "").strip()
-        if text:
-            out.append({"start": round(seg.start, 2), "end": round(seg.end, 2), "text": text})
+        if not text:
+            continue
+        record = {"start": round(seg.start, 2), "end": round(seg.end, 2), "text": text}
+        # Fail-open: a build that does not report these is treated as confident.
+        no_speech = getattr(seg, "no_speech_prob", 0.0)
+        avg_logprob = getattr(seg, "avg_logprob", 0.0)
+        if no_speech > NO_SPEECH_MAX or avg_logprob < AVG_LOGPROB_MIN:
+            record["uncertain"] = True
+            n_unsure += 1
+        out.append(record)
 
     if not out:
         raise SystemExit("Local faster-whisper returned no transcript segments")
 
-    print(f"[watch] transcribed {len(out)} segments via faster-whisper {model_name}", file=sys.stderr)
+    note = f", {n_unsure} low-confidence (marked [?])" if n_unsure else ""
+    print(
+        f"[watch] transcribed {len(out)} segments via faster-whisper {model_name}{note}",
+        file=sys.stderr,
+    )
     return out, f"faster-whisper ({model_name})"
 
 
