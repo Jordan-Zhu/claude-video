@@ -50,16 +50,22 @@ def transcribe_video_local(
     model = _get_model(model_name)
     # ponytail: temperature=0.0 alone + condition_on_previous_text (the default True)
     # makes whisper loop — it repeats one token or sentence from some point to the end
-    # of the file and the tail of the transcript is silently destroyed. These three
-    # settings are the fix: no conditioning on prior text, VAD to drop silence, and a
-    # temperature ladder so a degenerate decode is retried instead of accepted.
+    # of the file and the tail of the transcript is silently destroyed. These two
+    # settings are the fix: no conditioning on prior text, and a temperature ladder so
+    # a degenerate decode is retried instead of accepted.
+    #
+    # vad_filter is deliberately OFF. It looks like a free win and is not: on a
+    # 114-minute film it cut the last 26 minutes from 323 segments to 43 and dropped
+    # 1:33:02-1:43:16 entirely, and the same audio truncated at a different point when
+    # passed whole vs. sliced — so the loss scales with input length. It trades a loud
+    # failure (looping) for a silent one (a tail that just isn't there), which is worse
+    # because nothing in the output says it happened. Do not re-enable it as a
+    # denoising tweak without re-measuring segment counts on a long file.
     segments_iter, _info = model.transcribe(
         str(audio_path.resolve()),
         beam_size=5,
         condition_on_previous_text=False,
         temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=500),
     )
 
     out: list[dict] = []
